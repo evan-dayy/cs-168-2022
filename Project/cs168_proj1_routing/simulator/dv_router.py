@@ -122,6 +122,7 @@ class DVRouter(DVRouterBase):
         for dst in self.table:
             curr_latency = self.table[dst].latency
             for port in self.ports.get_all_ports():
+                x = curr_latency
                 # Module: Split Horizon
                 # --------------------------------------------------------
                 if (self.SPLIT_HORIZON and port == self.table[dst].port):
@@ -129,20 +130,21 @@ class DVRouter(DVRouterBase):
                 # --------------------------------------------------------
                 
                 advertise_pkt = RoutePacket(destination=dst, 
-                                            latency=curr_latency)
+                                            latency=x)
                 # Module: Poison Reverse
                 # --------------------------------------------------------
                 if (self.POISON_REVERSE and port == self.table[dst].port):
+                    x = INFINITY
                     advertise_pkt = RoutePacket(destination=dst, 
-                                            latency=INFINITY)
+                                            latency=x)
                 # --------------------------------------------------------
                 if force:
                     self.send(advertise_pkt, port=port, flood=False)
-                    self.HISTORY[(dst, port)] = curr_latency
+                    self.HISTORY[(dst, port)] = x
                 else:
-                    if (dst, port) not in self.HISTORY or self.HISTORY[(dst, port)] != curr_latency:
+                    if (dst, port) not in self.HISTORY or self.HISTORY[(dst, port)] != x:
                         self.send(advertise_pkt, port=port, flood=False)
-                        self.HISTORY[(dst, port)] = curr_latency
+                        self.HISTORY[(dst, port)] = x
 
     def expire_routes(self):
         """
@@ -197,7 +199,8 @@ class DVRouter(DVRouterBase):
                         route_dst, 
                         port,
                         latency=INFINITY,
-                        expire_time=self.table[route_dst].expire_time)
+                        expire_time=api.current_time() + self.ROUTE_TTL)
+            self.send_routes(force=False)
             return
         # --------------------------------------------------------
         if curr_route.port == port or route_latency + self.ports.link_to_lat[port] < curr_route.latency:
