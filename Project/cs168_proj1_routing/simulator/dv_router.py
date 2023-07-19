@@ -4,7 +4,7 @@ Your awesome Distance Vector router for CS 168
 Based on skeleton code by:
   MurphyMc, zhangwen0411, lab352
 """
-
+from collections import defaultdict
 import sim.api as api
 from cs168.dv import RoutePacket, \
                      Table, TableEntry, \
@@ -33,6 +33,8 @@ class DVRouter(DVRouterBase):
 
     # Determines if you send poison when a link goes down
     POISON_ON_LINK_DOWN = False
+    
+    HISTORY = {}
 
     def __init__(self):
         """
@@ -106,29 +108,41 @@ class DVRouter(DVRouterBase):
         :return: nothing.
         """
         # TODO: fill this in!
-        # TODO 1: Only the force true case
-        if force:
+        
+        # in conjunction with handle_link_up.
+        if self.SEND_ON_LINK_UP and single_port is not None:
             for dst in self.table:
                 curr_latency = self.table[dst].latency
-                for port in self.ports.get_all_ports():
-                    # Module: Split Horizon
-                    # --------------------------------------------------------
-                    if (self.SPLIT_HORIZON and port == self.table[dst].port):
-                        continue
-                    # --------------------------------------------------------
-                    
-                    # Module: Poison Reverse
-                    # --------------------------------------------------------
-                    if (self.POISON_REVERSE and port == self.table[dst].port):
-                        advertise_pkt = RoutePacket(destination=dst, 
-                                                latency=INFINITY)
-                        self.send(advertise_pkt, port=port, flood=False)
-                        continue
-                    # --------------------------------------------------------
+                advertise_pkt = RoutePacket(destination=dst, 
+                                            latency=curr_latency)
+                self.send(advertise_pkt, port=single_port, flood=False)
+                self.HISTORY[(dst, port)] = curr_latency
+            return
+        
+        for dst in self.table:
+            curr_latency = self.table[dst].latency
+            for port in self.ports.get_all_ports():
+                # Module: Split Horizon
+                # --------------------------------------------------------
+                if (self.SPLIT_HORIZON and port == self.table[dst].port):
+                    continue
+                # --------------------------------------------------------
+                
+                advertise_pkt = RoutePacket(destination=dst, 
+                                            latency=curr_latency)
+                # Module: Poison Reverse
+                # --------------------------------------------------------
+                if (self.POISON_REVERSE and port == self.table[dst].port):
                     advertise_pkt = RoutePacket(destination=dst, 
-                                                latency=curr_latency)
+                                            latency=INFINITY)
+                # --------------------------------------------------------
+                if force:
                     self.send(advertise_pkt, port=port, flood=False)
-        # TODO 2: Only the force false case
+                    self.HISTORY[(dst, port)] = curr_latency
+                else:
+                    if (dst, port) not in self.HISTORY or self.HISTORY[(dst, port)] != curr_latency:
+                        self.send(advertise_pkt, port=port, flood=False)
+                        self.HISTORY[(dst, port)] = curr_latency
 
     def expire_routes(self):
         """
@@ -150,9 +164,11 @@ class DVRouter(DVRouterBase):
                     INFINITY,
                     api.current_time() + self.ROUTE_TTL)
                 continue
+            
             # --------------------------------------------------------
             self.s_log("Removing route to %s" % dst) # logging the message
             del self.table[dst]
+            
 
     def handle_route_advertisement(self, route_dst, route_latency, port):
         """
@@ -170,6 +186,7 @@ class DVRouter(DVRouterBase):
                         port,
                         latency= route_latency + self.ports.link_to_lat[port],
                         expire_time=api.current_time() + self.ROUTE_TTL)
+            self.send_routes(force=False)
             return
         
         curr_route = self.table[route_dst]
@@ -189,6 +206,7 @@ class DVRouter(DVRouterBase):
                         port,
                         latency=route_latency + self.ports.link_to_lat[port],
                         expire_time=api.current_time() + self.ROUTE_TTL)
+            self.send_routes(force=False)
             return
         
 
@@ -201,8 +219,9 @@ class DVRouter(DVRouterBase):
         :returns: nothing.
         """
         self.ports.add_port(port, latency)
-
         # TODO: fill in the rest!
+        self.send_routes(force=True, single_port=port)
+
 
     def handle_link_down(self, port):
         """
@@ -212,6 +231,24 @@ class DVRouter(DVRouterBase):
         :returns: nothing.
         """
         self.ports.remove_port(port)
+        removed = []
+        for dst in self.table:
+            if self.table[dst].port == port:
+                removed.append(dst)
+        for dst in removed:
+            # Module: Poison Expired
+            # --------------------------------------------------------
+            if self.POISON_ON_LINK_DOWN:
+                self.table[dst] = TableEntry(
+                    dst,
+                    self.table[dst].port,
+                    INFINITY,
+                    api.current_time() + self.ROUTE_TTL)
+                self.send_routes(force=False)
+                continue
+            # --------------------------------------------------------
+            self.s_log("Removing route to %s" % dst) # logging the message
+            del self.table[dst]
 
         # TODO: fill this in!
 
