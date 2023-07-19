@@ -141,6 +141,16 @@ class DVRouter(DVRouterBase):
             if self.table[dst].expire_time <= api.current_time():
                 removed.append(dst)
         for dst in removed:
+            # Module: Poison Expired
+            # --------------------------------------------------------
+            if self.POISON_EXPIRED:
+                self.table[dst] = TableEntry(
+                    dst,
+                    self.table[dst].port,
+                    INFINITY,
+                    api.current_time() + self.ROUTE_TTL)
+                continue
+            # --------------------------------------------------------
             self.s_log("Removing route to %s" % dst) # logging the message
             del self.table[dst]
 
@@ -163,6 +173,16 @@ class DVRouter(DVRouterBase):
             return
         
         curr_route = self.table[route_dst]
+        # Counting to Infinity (Poison Reversed)
+        # --------------------------------------------------------
+        if curr_route.port == port and route_latency >= INFINITY:
+            self.table[route_dst] = TableEntry(
+                        route_dst, 
+                        port,
+                        latency=INFINITY,
+                        expire_time=self.table[route_dst].expire_time)
+            return
+        # --------------------------------------------------------
         if curr_route.port == port or route_latency + self.ports.link_to_lat[port] < curr_route.latency:
             self.table[route_dst] = TableEntry(
                         route_dst, 
