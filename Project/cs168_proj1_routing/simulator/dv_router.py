@@ -70,7 +70,13 @@ class DVRouter(DVRouterBase):
         assert port in self.ports.get_all_ports(), "Link should be up, but is not."
 
         # TODO: fill this in!
-
+        rte = TableEntry(host, 
+                         port,
+                         latency= self.ports.link_to_lat[port], # default link latency to that port
+                         expire_time=FOREVER)
+        self.table[host] = rte
+        
+        
     def handle_data_packet(self, packet, in_port):
         """
         Called when a data packet arrives at this router.
@@ -82,6 +88,11 @@ class DVRouter(DVRouterBase):
         :return: nothing.
         """
         # TODO: fill this in!
+        if packet.dst not in self.table or self.table[packet.dst].latency >= INFINITY:
+            return # package is dropped
+        self.send(packet, port=self.table[packet.dst].port, flood=False)
+        
+        
 
     def send_routes(self, force=False, single_port=None):
         """
@@ -95,6 +106,29 @@ class DVRouter(DVRouterBase):
         :return: nothing.
         """
         # TODO: fill this in!
+        # TODO 1: Only the force true case
+        if force:
+            for dst in self.table:
+                curr_latency = self.table[dst].latency
+                for port in self.ports.get_all_ports():
+                    # Module: Split Horizon
+                    # --------------------------------------------------------
+                    if (self.SPLIT_HORIZON and port == self.table[dst].port):
+                        continue
+                    # --------------------------------------------------------
+                    
+                    # Module: Poison Reverse
+                    # --------------------------------------------------------
+                    if (self.POISON_REVERSE and port == self.table[dst].port):
+                        advertise_pkt = RoutePacket(destination=dst, 
+                                                latency=INFINITY)
+                        self.send(advertise_pkt, port=port, flood=False)
+                        continue
+                    # --------------------------------------------------------
+                    advertise_pkt = RoutePacket(destination=dst, 
+                                                latency=curr_latency)
+                    self.send(advertise_pkt, port=port, flood=False)
+        # TODO 2: Only the force false case
 
     def expire_routes(self):
         """
@@ -102,6 +136,13 @@ class DVRouter(DVRouterBase):
         accordingly.
         """
         # TODO: fill this in!
+        removed = []
+        for dst in self.table:
+            if self.table[dst].expire_time <= api.current_time():
+                removed.append(dst)
+        for dst in removed:
+            self.s_log("Removing route to %s" % dst) # logging the message
+            del self.table[dst]
 
     def handle_route_advertisement(self, route_dst, route_latency, port):
         """
@@ -113,6 +154,23 @@ class DVRouter(DVRouterBase):
         :return: nothing.
         """
         # TODO: fill this in!
+        if route_dst not in self.table:
+            self.table[route_dst] = TableEntry(
+                        route_dst, 
+                        port,
+                        latency= route_latency + self.ports.link_to_lat[port],
+                        expire_time=api.current_time() + self.ROUTE_TTL)
+            return
+        
+        curr_route = self.table[route_dst]
+        if curr_route.port == port or route_latency + self.ports.link_to_lat[port] < curr_route.latency:
+            self.table[route_dst] = TableEntry(
+                        route_dst, 
+                        port,
+                        latency=route_latency + self.ports.link_to_lat[port],
+                        expire_time=api.current_time() + self.ROUTE_TTL)
+            return
+        
 
     def handle_link_up(self, port, latency):
         """
